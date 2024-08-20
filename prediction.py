@@ -10,6 +10,7 @@ import optuna
 from functools import partial
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 
 CV_FOLDS = 10
@@ -60,8 +61,8 @@ def classification(data_train, data_test, n_trials: int = 30, test_size: float =
         model.fit(trainin, trainout.ravel())
         
         # compute cross-validation score
-        cv_score = np.mean(cross_val_score(estimator=model, X=datasetin, y=datasetout, scoring="f1", cv=CV_FOLDS))
-        cv_roc_auc_score = np.mean(cross_val_score(estimator=model, X=datasetin, y=datasetout, scoring="roc_auc", cv=CV_FOLDS))
+        cv_score = np.mean(cross_val_score(estimator=model, X=testin, y=testout, scoring="f1", cv=CV_FOLDS))
+        cv_roc_auc_score = np.mean(cross_val_score(estimator=model, X=testin, y=testout, scoring="roc_auc", cv=CV_FOLDS))
 
         # predictions
         predtrain = model.predict(trainin)
@@ -133,7 +134,7 @@ def regression(data_train, data_test, n_trials: int = 30, test_size: float = 0.2
         model = XGBRegressor(**study.best_params, n_jobs=-1)
         model.fit(trainin, trainout.ravel())
         
-        cv_score = np.mean(cross_val_score(estimator=model, X=datasetin, y=datasetout, scoring=mae_score, cv=CV_FOLDS))
+        cv_score = np.mean(cross_val_score(estimator=model, X=testin, y=testout, scoring=mae_score, cv=CV_FOLDS))
         
         predtrain = model.predict(trainin)
         errortrain = mean_absolute_percentage_error(trainout, predtrain)
@@ -169,3 +170,87 @@ def correct_prediction(model_clf, model_reg, data_test):
 
 
 ###########################################################################################
+
+
+
+def train_models(data_reg: pd.DataFrame, data_clf: pd.DataFrame, data_big_reg, synth_data_reg, synth_data_clf, reg_model, clf_model, iter_num: int = 100):
+    data_X_test = data_reg.drop('saldo', axis=1)
+    data_y_test = data_reg['saldo'].values
+
+    errors_mae_real_small = []
+    errors_mse_real_small = []
+    errors_mae_real_big = []
+    errors_mse_real_big = []
+    errors_mae = []
+    errors_mse = []
+    errors_mae_adj = []
+    errors_mse_adj = []
+    errors_f1 = []
+
+    iters = tqdm(range(iter_num))
+    
+    for _ in iters:
+        #real small cities
+        data_reg = data_reg.sample(frac=1)
+        X_train, X_test, y_train, y_test = train_test_split(data_reg.drop('saldo', axis=1), data_reg['saldo'], test_size=0.2, shuffle=False)
+        
+        model_reg = reg_model
+        model_reg.fit(X_train, y_train)
+        
+        prediction = model_reg.predict(X_test)
+        errors_mae_real_small.append(mean_absolute_error(y_test.values, prediction) * 26466)
+        errors_mse_real_small.append(mean_squared_error(y_test.values, prediction) * 10000)
+        
+        
+        #real big cities
+        data_big_reg = data_big_reg.sample(frac=1)
+        X_train, X_test, y_train, y_test = train_test_split(data_big_reg[data_reg.columns].drop('saldo', axis=1),
+                                                            data_big_reg[data_reg.columns]['saldo'], test_size=0.2, shuffle=False)
+        
+        model_reg = reg_model
+        model_reg.fit(X_train, y_train)
+        
+        prediction = model_reg.predict(data_X_test)
+        errors_mae_real_big.append(mean_absolute_error(data_y_test, prediction) * 26466)
+        errors_mse_real_big.append(mean_squared_error(data_y_test, prediction) * 10000)  
+        
+        
+        #synth regression
+        synth_data_reg = synth_data_reg.sample(frac=1)
+        X_train, X_test, y_train, y_test = train_test_split(synth_data_reg.drop('saldo', axis=1), synth_data_reg['saldo'], test_size=0.2, shuffle=False)
+        
+        model_reg = reg_model
+        model_reg.fit(X_train, y_train)
+        
+        prediction = model_reg.predict(data_X_test)
+        errors_mae.append(mean_absolute_error(data_y_test, model_reg.predict(data_X_test)) * 26466)
+        errors_mse.append(mean_squared_error(data_y_test, prediction) * 10000)
+        
+        
+        #synth regression + synth classifier
+        synth_data_reg = synth_data_reg.sample(frac=1)
+        X_train, X_test, y_train, y_test = train_test_split(synth_data_reg.drop('saldo', axis=1), synth_data_reg['saldo'], test_size=0.2, shuffle=False)
+        X_train_clf, X_test_clf, y_train_clf, y_test_clf = train_test_split(synth_data_clf.loc[synth_data_reg.index].drop('saldo', axis=1),
+                                                                            synth_data_clf.loc[synth_data_reg.index]['saldo'], test_size=0.2, shuffle=False)
+        
+        model_clf = clf_model
+        model_reg = reg_model
+        
+        model_reg.fit(X_train, y_train)
+        model_clf.fit(X_train_clf, y_train_clf)
+        
+        
+        pred_class = model_clf.predict(data_X_test)
+        errors_f1.append(f1_score(data_clf['saldo'].values, pred_class))
+        prediction_adj = np.abs(model_reg.predict(data_X_test))
+        prediction_adj[np.where(pred_class == 0)[0]] = prediction_adj[np.where(pred_class == 0)[0]] * (-1)
+        
+        errors_mae_adj.append(mean_absolute_error(data_y_test, prediction_adj) * 26466)
+        errors_mse_adj.append(mean_squared_error(data_y_test, prediction_adj) * 10000)
+        
+    errors = {'MAE_small': errors_mae_real_small, 'MSE_small': errors_mse_real_small,
+              'MAE_big': errors_mae_real_big, 'MSE_big': errors_mse_real_big,
+              'MAE_synth_reg': errors_mae, 'MSE_synth_reg': errors_mse,
+              'MAE_adjusted': errors_mae_adj, 'MSE_adjusted': errors_mse_adj}
+        
+    return errors

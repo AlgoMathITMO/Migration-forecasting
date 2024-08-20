@@ -7,7 +7,7 @@ import seaborn as sns
 import shap
 import warnings
 import scipy.stats as sts
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, roc_curve
 from xgboost import XGBRegressor
@@ -36,9 +36,44 @@ def plot_qq(data_test, prediction):
     plt.show()
     
     
-def plot_qq_with_axis(data_test, prediction, save=False):
-    plt.plot(data_test['saldo'], data_test['saldo'], color='tab:red', zorder=2, label='Identity line')
-    plt.scatter(data_test['saldo'], prediction ,zorder=3, color='tab:blue')
+# def plot_qq_with_axis(data_test, prediction, save=False):
+#     plt.plot(data_test['saldo'], data_test['saldo'], color='tab:red', zorder=2, label='Identity line')
+#     plt.scatter(data_test['saldo'], prediction ,zorder=3, color='tab:blue')
+
+#     plt.xlabel('True')
+#     plt.ylabel('Prediction')
+    
+#     plt.axhline(0., c='k', linewidth=0.7, zorder=1)
+#     plt.axvline(0., c='k', linewidth=0.7, zorder=1)
+
+#     plt.legend()
+    
+#     plt.tight_layout(pad=0.5)
+    
+#     if save:
+#         plt.savefig('images/qq_plot.pdf', dpi=300)
+        
+#     plt.show()
+    
+
+def plot_qq_with_axis(data_test, prediction, save=False, norm=26466):
+    plt.plot(data_test['saldo']*norm, data_test['saldo']*norm, color='tab:red', zorder=2, label='Identity line')
+    plt.scatter(data_test['saldo']*norm, prediction*norm ,zorder=3, color='tab:blue')
+    
+    #Confidence interval
+    lr = LinearRegression()
+    lr.fit(data_test['saldo'].values.reshape(-1, 1)*norm, prediction.reshape(-1, 1)*norm)
+    plt.plot(data_test['saldo']*norm, lr.intercept_ + lr.coef_[0] * data_test['saldo']*norm, zorder=1, color='green', label='OLS', alpha=0.8)
+    
+    t_crit = sts.t.ppf(1 - 0.05/2, df=len(prediction) - 2)
+    x = sorted(data_test['saldo']*norm)
+    # sigma = np.std(prediction*norm)
+    sigma = np.sqrt(sum((prediction*norm - data_test['saldo']*norm)**2) / (len(prediction)-2))
+    x_bar = np.mean(x)
+    plt.fill_between(x, lr.intercept_ + lr.coef_[0] * x - t_crit * sigma * np.sqrt(  1/len(x) + (x - x_bar)**2/((x-x_bar)**2).sum()),
+                 lr.intercept_ + lr.coef_[0] * x + t_crit * sigma * np.sqrt(  1/len(x) + (x - x_bar)**2 / ((x-x_bar)**2).sum()), 
+                 color = 'green', alpha = 0.1, label = '95% CI', linestyle='-')
+
 
     plt.xlabel('True')
     plt.ylabel('Prediction')
@@ -104,14 +139,34 @@ def plot_corr(data: pd.DataFrame, path: str = 'corr', save=False):
     plt.show()
     
     
+# def plot_significance_ks(data_clf, synth_data_clf, data_reg, synth_data_reg, path='pvalue', save=False):
+#     plt.bar(np.arange(len(data_clf.columns)), ks_test(data_clf, synth_data_clf.sample(len(data_clf))), color='tab:blue', alpha=0.7, label='classification')
+#     plt.bar(np.arange(len(data_reg.columns)), ks_test(data_reg, synth_data_reg.sample(len(data_reg))), color='tab:red', alpha=0.7, label='regression')
+
+#     plt.plot([-1, 14], [0.05, 0.05], color='black', label='significance level')
+
+#     plt.xlabel('column index')
+#     plt.xticks(ticks=np.arange(len(data_clf.columns)))
+#     plt.ylabel('p-value')
+#     plt.legend()
+
+#     plt.tight_layout(pad=0.5)
+#     if save:
+#         plt.savefig(path, dpi=300)
+
+#     plt.show()    
+    
+    
 def plot_significance_ks(data_clf, synth_data_clf, data_reg, synth_data_reg, path='pvalue', save=False):
+    plt.subplots(figsize=(8, 7))
     plt.bar(np.arange(len(data_clf.columns)), ks_test(data_clf, synth_data_clf.sample(len(data_clf))), color='tab:blue', alpha=0.7, label='classification')
     plt.bar(np.arange(len(data_reg.columns)), ks_test(data_reg, synth_data_reg.sample(len(data_reg))), color='tab:red', alpha=0.7, label='regression')
 
     plt.plot([-1, 14], [0.05, 0.05], color='black', label='significance level')
 
-    plt.xlabel('column index')
-    plt.xticks(ticks=np.arange(len(data_clf.columns)))
+    # plt.xlabel('column index')
+    # plt.xticks(ticks=np.arange(len(data_clf.columns)))
+    plt.xticks(ticks=np.arange(len(data_clf.columns)), labels=list(data_reg.columns), rotation=90)
     plt.ylabel('p-value')
     plt.legend()
 
@@ -119,7 +174,7 @@ def plot_significance_ks(data_clf, synth_data_clf, data_reg, synth_data_reg, pat
     if save:
         plt.savefig(path, dpi=300)
 
-    plt.show()    
+    plt.show()  
     
     
 def plot_shap(model, data, synth_data, path='shap', save=False):
@@ -153,7 +208,7 @@ def plot_roc_curve(model, synth_data, path='roc_curve', save=False):
     plt.show()
 
     
-def feature_importance(data: pd.DataFrame, X: pd.DataFrame, y, path: str = 'fi', save=False):
+def feature_importance(X: pd.DataFrame, y, path: str = 'fi', save=False):
     
     xgb = XGBRegressor()
     xgb.fit(X, y)
@@ -163,7 +218,7 @@ def feature_importance(data: pd.DataFrame, X: pd.DataFrame, y, path: str = 'fi',
     shap_values = explainer(X)
 
 
-    fi = np.array(sorted(list(zip(data.columns, np.abs(shap_values.values).mean(axis=0))), key=lambda x: x[1]))
+    fi = np.array(sorted(list(zip(X.columns, np.abs(shap_values.values).mean(axis=0))), key=lambda x: x[1]))
 
 
     plt.subplots(figsize=(10,5), dpi=100)
